@@ -6,15 +6,9 @@ from modelutils import *
 from quant import Quantizer
 from gptq import GPTQ
 
-def get_model_and_input_output(args_dataset, args_nsamples, args_seed, args_model):
+def get_model_and_input_output(args_dataset, args_nsamples, args_seed, args_model, inps_path="", outs_path=""):
     # Load a pre-trained GPT-2 medium model (hidden size = 1024)
     model = GPT2LMHeadModel.from_pretrained(args_model)
-
-    seqlen = 1024
-
-    dataloader, testloader = get_loaders(
-        args_dataset, nsamples=args_nsamples, seed=args_seed, model=args_model, seqlen=seqlen
-    )
     model.transformer.h = model.transformer.h[:1]
     model.eval()
 
@@ -24,8 +18,17 @@ def get_model_and_input_output(args_dataset, args_nsamples, args_seed, args_mode
     layer.eval()  # set to evaluation mode
     print("Original weight shape:", layer.weight.shape)  # Expected: torch.Size([1024, 1024])
 
+    if inps_path != "" and outs_path != "":
+        inps = torch.load(inps_path)
+        outs = torch.load(outs_path)
+        return (layer, inps, outs)
 
     # ----- Step 3. Generate a list of sample inputs and collect calibration data -----
+    seqlen = 1024
+    dataloader, testloader = get_loaders(
+        args_dataset, nsamples=args_nsamples, seed=args_seed, model=args_model, seqlen=seqlen
+    )
+
     in_size = (args_nsamples, layer.weight.shape[1], seqlen)
     out_size = (args_nsamples, layer.weight.shape[0], seqlen)
     inps = []
@@ -55,6 +58,9 @@ def get_model_and_input_output(args_dataset, args_nsamples, args_seed, args_mode
         h.remove()
     print("end")
     
+    inps = torch.stack(inps)
+    outs = torch.stack(outs)
+    
     #get input and output
     return (layer, inps, outs)
 
@@ -66,15 +72,16 @@ if __name__ == '__main__':
     args_seed = 0
     args_model = "gpt2-medium"
 
-    layer, inps, outs = get_model_and_input_output(args_dataset, args_nsamples, args_seed, args_model)
-        
-    inps_t = torch.stack(inps)
-    outs_t = torch.stack(outs)
+    layer, inps, outs = get_model_and_input_output(args_dataset, args_nsamples, args_seed, args_model, inps_path="data/inps.pt", outs_path="data/outs.pt")
+
+    #torch.save(inps, "data/inps.pt")
+    #torch.save(outs, "data/outs.pt")
+
+    print(layer)
+    print(inps.shape)
+    print(outs.shape)
     
-    torch.save(inps_t, "data/inps.pt")
-    torch.save(outs_t, "data/outs.pt")
     
-    '''
     # Save a copy of the original weights (optional, for later loss computation)
     original_weight = layer.weight.data.clone()
 
@@ -110,5 +117,4 @@ if __name__ == '__main__':
         quant_error = torch.nn.functional.mse_loss(layer.weight.data, original_weight).item()
 
     print("Quantization Loss (Error):", quant_error)
-    '''
-
+    
