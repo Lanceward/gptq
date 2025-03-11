@@ -92,7 +92,7 @@ if __name__ == '__main__':
     gptq_obj = GPTQ(layer)
     # Instantiate and configure the quantizer for 4-bit quantization.
     gptq_obj.quantizer = Quantizer()
-    gptq_obj.quantizer.configure(bits=3, perchannel=True, sym=False, mse=False)
+    gptq_obj.quantizer.configure(bits=1.5849625007211563, perchannel=True, sym=False, mse=False)
     
     # add batch to gptq
     for i in range(inps.shape[0]):
@@ -100,24 +100,14 @@ if __name__ == '__main__':
 
     # ----- Step 4. Quantize the layer using fasterquant() -----
     # Here we call fasterquant() to quantize the layer’s weights to 4-bit.
-    """
-    quant_errors = gptq_obj.fasterquant(
-        blocksize=1,
-        percdamp=0.01,
-        groupsize=-1,
-        actorder=False,
-        static_groups=False,
-    )
-    """
     quant_errors_sorted = gptq_obj.fasterquant(
-        blocksize=1,
+        blocksize=32,
         percdamp=0.01,
-        groupsize=-1,
+        groupsize=128,
         actorder=True,
         static_groups=False,
         Weight = original_weight
     )
 
-    #plt.plot(quant_errors, "r")
     plt.plot(quant_errors_sorted, "b")
     plt.show()

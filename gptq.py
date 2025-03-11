@@ -14,6 +14,32 @@ torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 
 
+def per_col_scaling(quantizer, col_w):
+    
+    # per row min and max after quantifiying
+    col_min = (0 - quantizer.zero) * quantizer.scale
+    col_max = (quantizer.maxq - quantizer.zero) * quantizer.scale
+        
+    col_w = col_w.flatten()
+    col_min = col_min.flatten()
+    col_max = col_max.flatten()
+    # find the largest scaling violator
+    # out of bound
+    min_oob = (col_min - col_w) / quantizer.scale.flatten()
+    max_oob = (col_w - col_max) / quantizer.scale.flatten()
+        
+    mmin_violator = torch.argmax(min_oob)
+    mmax_violator = torch.argmax(max_oob)
+    
+    print(min_oob[mmin_violator], max_oob[mmax_violator])
+    
+    if min_oob[mmin_violator] > max_oob[mmax_violator]:
+        s_mod = -col_w[mmin_violator] / (quantizer.zero[mmin_violator] * quantizer.scale[mmin_violator])
+    else:
+        s_mod = col_w[mmax_violator] / ((quantizer.maxq - quantizer.zero[mmax_violator]) * quantizer.scale[mmax_violator])
+    
+    return max(s_mod, 1.0)
+
 class GPTQ:
 
     def __init__(self, layer):
@@ -76,7 +102,7 @@ class GPTQ:
             self.quantizer.find_params(W, weight=True)
 
         H = self.H.clone()
-        #del self.H
+        del self.H
         if DEBUG:
             print(H.shape)
         dead = torch.diag(H) == 0 # find weights that has no local curvature, like x^4
@@ -90,9 +116,22 @@ class GPTQ:
                 quantizer = copy.deepcopy(self.quantizer)
                 quantizer.find_params(W[:, i:(i + groupsize)], weight=True)
                 groups.append(quantizer)
-
+        
+        #waypoints = [512, 832, 1024]
+        waypoints = [352, 672, 1024]
+        #waypoints = [512, 512, 1024]
         if actorder:
-            perm = torch.argsort(torch.diag(H), descending=True) # sort diagnal Hessian in descending. We want to deal with large errors first. More chance for other weights to adjust
+            perm_desc = torch.argsort(torch.diag(H), descending=True) # sort diagnal Hessian in descending. We want to deal with large errors first. More chance for other weights to adjust
+            perm = torch.zeros_like(perm_desc)
+            
+            len = perm.shape[0]
+
+            past_idx = 0
+            for idx in waypoints:
+                perm[past_idx: idx] = perm_desc[(len - idx): (len-past_idx)]
+                past_idx = idx
+                
+            #perm = perm_desc
             W = W[:, perm] # Rearrange columns of W by the permutation
             H = H[perm][:, perm] # Rearrange H by the permutation. Note both rows and columns needs rearrangement
             invperm = torch.argsort(perm) # get the permutation that will return original W
@@ -112,7 +151,17 @@ class GPTQ:
 
         al = []
 
+        current_bits = self.quantizer.bits
+
+
         for i1 in range(0, self.columns, blocksize):
+            if i1 >= 0:
+                current_bits = 1.5849625007211563
+            if i1 >= 352:
+                current_bits = 3
+            if i1 >= 672:
+                current_bits = 4.415037499278844
+
             i2 = min(i1 + blocksize, self.columns)
             count = i2 - i1 # count of columns in block
 
@@ -135,9 +184,14 @@ class GPTQ:
                         if actorder:
                             idx = perm[idx]
                         self.quantizer = groups[idx // groupsize]
-
+                        
+                #LANCE FUNCTIONAL MODIFICATION
+                current_scale = self.quantizer.scale * self.quantizer.maxq / (2**current_bits - 1)
+                current_zero = self.quantizer.zero * (2**current_bits - 1) / self.quantizer.maxq
+                current_maxq = (2**current_bits - 1)
+                #LANCE FINISH FUNCTIONAL MODIFICATION
                 q = quantize(
-                    w.unsqueeze(1), self.quantizer.scale, self.quantizer.zero, self.quantizer.maxq
+                    w.unsqueeze(1), current_scale, current_zero, current_maxq
                 ).flatten() # quantize column w
                 Q1[:, i] = q # store quantized column in Q1
                 Losses1[:, i] = (w - q) ** 2 / d ** 2 # calculate losse of ith column
@@ -168,7 +222,7 @@ class GPTQ:
                     self.layer.weight.data[widx, :] = W_t[:, widx].t()
                 #activation loss
                 al.append(torch.sum((self.layer(self.inp1) - self.out1) ** 2).item())
-                print("activa loss: ", al[-1])
+                print("column ", i1, ": activa loss: ", al[-1])
                 #print("weight loss: ", torch.sum(Losses))
 
         #torch.cuda.synchronize()

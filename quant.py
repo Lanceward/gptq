@@ -30,6 +30,7 @@ class Quantizer(nn.Module):
         self.norm = norm
         self.grid = grid
         self.maxshrink = maxshrink 
+        self.bits = bits
         if trits:
             self.maxq = torch.tensor(-1) 
 
@@ -40,7 +41,7 @@ class Quantizer(nn.Module):
         shape = x.shape
         if self.perchannel:
             if weight:
-                x = x.flatten(1)
+                x = x.flatten(1) # flatten weights into a 2 dim array(matrix)
             else:
                 if len(shape) == 4:
                     x = x.permute([1, 0, 2, 3])
@@ -52,30 +53,30 @@ class Quantizer(nn.Module):
         else:
             x = x.flatten().unsqueeze(0)
 
-        tmp = torch.zeros(x.shape[0], device=dev)
-        xmin = torch.minimum(x.min(1)[0], tmp)
-        xmax = torch.maximum(x.max(1)[0], tmp)
+        tmp = torch.zeros(x.shape[0], device=dev) # vector of length (# of rows in x)
+        xmin = torch.minimum(x.min(1)[0], tmp) # minimum of each rows, maximum is 0
+        xmax = torch.maximum(x.max(1)[0], tmp) # maximum of each rows, minimum is 0
 
-        if self.sym:
-            xmax = torch.maximum(torch.abs(xmin), xmax)
-            tmp = xmin < 0
-            if torch.any(tmp):
-                xmin[tmp] = -xmax[tmp]
-        tmp = (xmin == 0) & (xmax == 0)
-        xmin[tmp] = -1
-        xmax[tmp] = +1
+        if self.sym: # if we want the quant range to be symmetric
+            xmax = torch.maximum(torch.abs(xmin), xmax) # maximum of abs of each row
+            tmp = xmin < 0 # if all xmin are smaller than 0
+            if torch.any(tmp): # flip xmin to be the mirror of xmax
+                xmin[tmp] = -xmax[tmp] 
+        tmp = (xmin == 0) & (xmax == 0) 
+        xmin[tmp] = -1 # ensure max of xmin is negative
+        xmax[tmp] = +1 # ensure min of xmax is positive
 
         if self.maxq < 0:
           self.scale = xmax
           self.zero = xmin
         else:
-          self.scale = (xmax - xmin) / self.maxq
-          if self.sym:
-              self.zero = torch.full_like(self.scale, (self.maxq + 1) / 2)
+          self.scale = (xmax - xmin) / self.maxq 
+          if self.sym: #symmetric
+              self.zero = torch.full_like(self.scale, (self.maxq + 1) / 2) # 0 is in the middle of quantized numbers
           else:
-              self.zero = torch.round(-xmin / self.scale)
+              self.zero = torch.round(-xmin / self.scale) # 0 is whatever the distance from min to 0 is, scaled down
 
-        if self.mse:
+        if self.mse: # skip now
             best = torch.full([x.shape[0]], float('inf'), device=dev)
             for i in range(int(self.maxshrink * self.grid)):
                 p = 1 - i / self.grid 
