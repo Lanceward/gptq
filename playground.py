@@ -6,6 +6,8 @@ from modelutils import *
 from quant import Quantizer
 from gptq import GPTQ
 
+import matplotlib.pyplot as plt
+
 def get_model_and_input_output(args_dataset, args_nsamples, args_seed, args_model, inps_path="", outs_path=""):
     # Load a pre-trained GPT-2 medium model (hidden size = 1024)
     model = GPT2LMHeadModel.from_pretrained(args_model)
@@ -90,7 +92,7 @@ if __name__ == '__main__':
     gptq_obj = GPTQ(layer)
     # Instantiate and configure the quantizer for 4-bit quantization.
     gptq_obj.quantizer = Quantizer()
-    gptq_obj.quantizer.configure(bits=4, perchannel=True, sym=False, mse=False)
+    gptq_obj.quantizer.configure(bits=3, perchannel=True, sym=False, mse=False)
     
     # add batch to gptq
     for i in range(inps.shape[0]):
@@ -98,18 +100,24 @@ if __name__ == '__main__':
 
     # ----- Step 4. Quantize the layer using fasterquant() -----
     # Here we call fasterquant() to quantize the layer’s weights to 4-bit.
-    quant_error = gptq_obj.fasterquant(
-        blocksize=128,
+    """
+    quant_errors = gptq_obj.fasterquant(
+        blocksize=1,
         percdamp=0.01,
         groupsize=-1,
         actorder=False,
-        static_groups=False
+        static_groups=False,
+    )
+    """
+    quant_errors_sorted = gptq_obj.fasterquant(
+        blocksize=1,
+        percdamp=0.01,
+        groupsize=-1,
+        actorder=True,
+        static_groups=False,
+        Weight = original_weight
     )
 
-    # If fasterquant() does not return a value, you could compute the mean squared error
-    # between the original weights and the quantized weights as a proxy:
-    if quant_error is None:
-        quant_error = torch.nn.functional.mse_loss(layer.weight.data, original_weight).item()
-
-    print("Quantization Loss (Error):", quant_error)
-    
+    #plt.plot(quant_errors, "r")
+    plt.plot(quant_errors_sorted, "b")
+    plt.show()
