@@ -91,17 +91,12 @@ if __name__ == '__main__':
     # Instantiate and configure the quantizer for 4-bit quantization.
     gptq_obj.quantizer = Quantizer()
     gptq_obj.quantizer.configure(bits=4, perchannel=True, sym=False, mse=False)
+    
+    # add batch to gptq
+    for i in range(inps.shape[0]):
+        gptq_obj.add_batch(inps[i], outs[i])
 
     # ----- Step 4. Quantize the layer using fasterquant() -----
-    # Note: In the GPTQ implementation, fasterquant() computes the quantization error (loss)
-    # and prints it. For this example, we assume that fasterquant() is either modified
-    # to return the loss value or we capture the printed value.
-    #
-    # The parameters below are:
-    #   - percdamp: dampening factor (e.g. 0.01)
-    #   - groupsize: set to -1 to quantize the full row; adjust if needed.
-    #   - actorder: set to False unless using the activation-order heuristic.
-    #
     # Here we call fasterquant() to quantize the layer’s weights to 4-bit.
     quant_error = gptq_obj.fasterquant(
         blocksize=128,
